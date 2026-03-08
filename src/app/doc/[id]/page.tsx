@@ -20,7 +20,7 @@ export default function Page({
   const [username, setUsername] = useState("Guest User")
   const [cells, setCells] = useState<Record<string, CellData>>({})
   const [isWriting, setIsWriting] = useState(false)
-  const writeTimeoutRef = useRef<NodeJS.Timeout>()
+  const writeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {

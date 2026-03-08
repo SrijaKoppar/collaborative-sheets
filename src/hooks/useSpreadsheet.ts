@@ -25,7 +25,7 @@ export function useSpreadsheet(docId: string) {
         Object.keys(data.cells).forEach((key) => {
           const cellValue = evaluateFormula(data.cells[key].value, cellsData)
           cellsData[key] = {
-            value: cellValue,
+            value: String(cellValue),
             format: data.cells[key].format || {}
           }
         })
