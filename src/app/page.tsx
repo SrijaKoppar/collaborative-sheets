@@ -1,15 +1,21 @@
 "use client"
 
 import { collection, getDocs, addDoc } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { onAuthStateChanged, User } from "firebase/auth"
+import { db, auth } from "@/lib/firebase"
+import { logout } from "@/lib/auth"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
 export default function Page() {
 
+  const router = useRouter()
   const [docs, setDocs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
 
   async function loadDocs() {
     const snap = await getDocs(collection(db, "documents"))
@@ -22,19 +28,39 @@ export default function Page() {
   }
 
   useEffect(() => {
+    // Listen to Firebase auth state
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user)
+      setAuthLoading(false)
+    })
+    
     loadDocs()
+    
+    return () => unsubscribe()
   }, [])
+
+  const handleLogout = async () => {
+    try {
+      await logout()
+      sessionStorage.clear()
+      router.push('/auth/login')
+    } catch (error) {
+      console.error("Logout failed:", error)
+    }
+  }
 
   async function createDocument() {
     setCreating(true)
     try {
+      const authorName = firebaseUser?.displayName || firebaseUser?.email || "Guest"
       const ref = await addDoc(collection(db, "documents"), {
         title: "Untitled Spreadsheet",
-        author: "Guest",
+        author: authorName,
+        authorId: firebaseUser?.uid || null,
         updatedAt: Date.now(),
         cells: {}
       })
-      window.location.href = `/doc/${ref.id}`
+      router.push(`/doc/${ref.id}`)
     } catch (error) {
       console.error("Failed to create document:", error)
       setCreating(false)
@@ -46,26 +72,78 @@ export default function Page() {
       {/* Header */}
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-6xl mx-auto px-6 py-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-900">
-                Spreadsheets
-              </h1>
-              <p className="text-slate-500 text-sm mt-2">
-                Real-time collaborative sheets
-              </p>
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center justify-center w-12 h-12 bg-blue-600 rounded-xl shadow-lg shadow-blue-600/20">
+                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-slate-900">
+                  Spreadsheets
+                </h1>
+                <p className="text-slate-500 text-sm">
+                  Real-time collaborative sheets
+                </p>
+              </div>
             </div>
-            <button
-              onClick={createDocument}
-              disabled={creating}
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium px-6 py-2.5 rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              {creating ? "Creating..." : "New Spreadsheet"}
-            </button>
+            <div className="flex items-center gap-4">
+              {authLoading ? (
+                <div className="w-8 h-8 rounded-full bg-slate-200 animate-pulse" />
+              ) : firebaseUser ? (
+                <div className="flex items-center gap-3">
+                  <div className="text-right hidden sm:block">
+                    <p className="text-sm font-medium text-slate-900">{firebaseUser.displayName || firebaseUser.email}</p>
+                    <p className="text-xs text-slate-500">{firebaseUser.email}</p>
+                  </div>
+                  {firebaseUser.photoURL ? (
+                    <img 
+                      src={firebaseUser.photoURL} 
+                      alt={firebaseUser.displayName || "User"} 
+                      className="w-9 h-9 rounded-full border-2 border-slate-200"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm">
+                      {(firebaseUser.displayName || firebaseUser.email || "U")[0].toUpperCase()}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleLogout}
+                    className="text-slate-600 hover:text-slate-900 text-sm font-medium px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Link
+                    href="/auth/login"
+                    className="text-slate-600 hover:text-slate-900 text-sm font-medium px-4 py-2 rounded-lg hover:bg-slate-100 transition-colors"
+                  >
+                    Login
+                  </Link>
+                  <Link
+                    href="/auth/signup"
+                    className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                  >
+                    Sign Up
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
+
+          <button
+            onClick={createDocument}
+            disabled={creating}
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium px-6 py-2.5 rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            {creating ? "Creating..." : "New Spreadsheet"}
+          </button>
         </div>
       </header>
 

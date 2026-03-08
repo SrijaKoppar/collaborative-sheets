@@ -2,23 +2,36 @@
 
 import { useState, useRef, useEffect } from "react"
 import Presence from "./Presence"
+import WriteStateIndicator from "./WriteStateIndicator"
+import ExportMenu from "./ExportMenu"
+import { CellData } from "@/types/spreadsheet"
+
+interface UserInfo {
+  displayName?: string | null
+  email?: string | null
+  photoURL?: string | null
+}
 
 interface DocumentHeaderProps {
-  docId: string
   title: string
   onTitleChange?: (title: string) => void
   users?: any[]
   isSaving?: boolean
   lastSaved?: Date
+  username?: string
+  cells?: Record<string, CellData>
+  currentUser?: UserInfo | null
 }
 
 export default function DocumentHeader({
-  docId,
   title,
   onTitleChange,
   users = [],
   isSaving = false,
-  lastSaved
+  lastSaved,
+  username = "Guest User",
+  cells = {},
+  currentUser
 }: DocumentHeaderProps) {
   
   const [isEditing, setIsEditing] = useState(false)
@@ -48,18 +61,6 @@ export default function DocumentHeader({
       setEditTitle(title)
       setIsEditing(false)
     }
-  }
-
-  const getRelativeTime = (date: Date) => {
-    const now = new Date()
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-    
-    if (seconds < 60) return 'just now'
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    return date.toLocaleDateString()
   }
 
   return (
@@ -93,24 +94,11 @@ export default function DocumentHeader({
 
           {/* Status Section */}
           <div className="flex items-center gap-6">
-            {/* Save Status */}
-            <div className="text-sm text-slate-500">
-              {isSaving ? (
-                <div className="flex items-center gap-2">
-                  <div className="animate-spin">
-                    <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <circle cx="12" cy="12" r="10" strokeWidth={2} opacity="0.25" />
-                      <path strokeWidth={2} d="M4 12a8 8 0 018-8v0a8 8 0 016.56 12.56" strokeLinecap="round" />
-                    </svg>
-                  </div>
-                  <span>Saving...</span>
-                </div>
-              ) : lastSaved ? (
-                <span>Saved {getRelativeTime(lastSaved)}</span>
-              ) : (
-                <span className="text-slate-400">Saving automatically</span>
-              )}
-            </div>
+            {/* Write State Indicator */}
+            <WriteStateIndicator isWriting={isSaving} lastSaved={lastSaved} />
+
+            {/* Export Menu */}
+            <ExportMenu cells={cells} title={title} />
 
             {/* Presence Indicators */}
             {users && users.length > 0 && (
@@ -120,16 +108,27 @@ export default function DocumentHeader({
         </div>
 
         {/* Info Bar */}
-        {docId && (
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <div>
-              ID: <code className="font-mono text-slate-600">{docId.slice(0, 12)}...</code>
-            </div>
-            <div className="flex gap-4">
-              <span>Share your spreadsheet to collaborate with others</span>
-            </div>
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <div className="flex items-center gap-3">
+            {currentUser?.photoURL ? (
+              <img 
+                src={currentUser.photoURL} 
+                alt={currentUser.displayName || "User"} 
+                className="w-6 h-6 rounded-full"
+              />
+            ) : (
+              <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-xs">
+                {(currentUser?.displayName || currentUser?.email || username || "U")[0].toUpperCase()}
+              </div>
+            )}
+            <span className="text-slate-700 font-medium">
+              {currentUser?.displayName || currentUser?.email || username}
+            </span>
           </div>
-        )}
+          <div className="flex items-center gap-4 text-slate-400">
+            <span>Share this URL to collaborate</span>
+          </div>
+        </div>
       </div>
     </header>
   )

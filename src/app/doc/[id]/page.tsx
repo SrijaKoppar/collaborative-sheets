@@ -3,7 +3,10 @@
 import Spreadsheet from "@/components/Spreadsheet"
 import DocumentHeader from "@/components/DocumentHeader"
 import Link from "next/link"
-import { useState, use } from "react"
+import { useState, use, useRef, useEffect } from "react"
+import { onAuthStateChanged, User } from "firebase/auth"
+import { auth } from "@/lib/firebase"
+import { CellData } from "@/types/spreadsheet"
 
 export default function Page({
   params,
@@ -13,6 +16,21 @@ export default function Page({
 
   const { id } = use(params)
   const [documentTitle, setDocumentTitle] = useState("Untitled Spreadsheet")
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null)
+  const [username, setUsername] = useState("Guest User")
+  const [cells, setCells] = useState<Record<string, CellData>>({})
+  const [isWriting, setIsWriting] = useState(false)
+  const writeTimeoutRef = useRef<NodeJS.Timeout>()
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user)
+      if (user) {
+        setUsername(user.displayName || user.email || "User")
+      }
+    })
+    return () => unsubscribe()
+  }, [])
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -30,14 +48,31 @@ export default function Page({
 
       {/* Document Header */}
       <DocumentHeader
-        docId={id}
         title={documentTitle}
         onTitleChange={setDocumentTitle}
+        username={username}
+        cells={cells}
+        isSaving={isWriting}
+        currentUser={firebaseUser ? {
+          displayName: firebaseUser.displayName,
+          email: firebaseUser.email,
+          photoURL: firebaseUser.photoURL
+        } : null}
       />
 
       {/* Content */}
       <main className="flex-1 max-w-full overflow-hidden">
-        <Spreadsheet docId={id} />
+        <Spreadsheet 
+          docId={id}
+          onCellsChange={setCells}
+          onWriteStateChange={(isWriting) => {
+            setIsWriting(isWriting)
+            if (writeTimeoutRef.current) clearTimeout(writeTimeoutRef.current)
+            if (isWriting) {
+              writeTimeoutRef.current = setTimeout(() => setIsWriting(false), 500)
+            }
+          }}
+        />
       </main>
     </div>
   )

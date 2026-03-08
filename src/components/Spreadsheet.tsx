@@ -6,7 +6,6 @@ import Toolbar from "./Toolbar"
 import { useSpreadsheet } from "@/hooks/useSpreadsheet"
 import { usePresence } from "@/hooks/usePresence"
 import { useSelection } from "@/hooks/useSelection"
-import { useHistory } from "@/hooks/useHistory"
 import { CellFormat } from "@/types/spreadsheet"
 
 const ROWS = 30
@@ -16,11 +15,16 @@ function colName(index: number) {
   return String.fromCharCode(65 + index)
 }
 
-export default function Spreadsheet({ docId }: { docId: string }) {
+interface SpreadsheetProps {
+  docId: string
+  onCellsChange?: (cells: any) => void
+  onWriteStateChange?: (isWriting: boolean) => void
+}
+
+export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange }: SpreadsheetProps) {
 
   const { cells, updateCell } = useSpreadsheet(docId)
-  const { selectedCells, activeCellId, selectCell, selectRange, clearSelection, extendSelection, setActiveCellId } = useSelection()
-  const { push: addToHistory, undo, redo, canUndo, canRedo } = useHistory(cells)
+  const { selectedCells, selectCell, selectRange, clearSelection, setActiveCellId } = useSelection()
 
   const [user, setUser] = useState<{ name: string; color: string } | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -49,6 +53,24 @@ export default function Spreadsheet({ docId }: { docId: string }) {
     user?.color || ""
   )
 
+  // Notify parent component of cell changes
+  useEffect(() => {
+    onCellsChange?.(cells)
+  }, [cells, onCellsChange])
+
+  // Notify parent of write state changes
+  const handleUpdateCell = useCallback((cellId: string, value: string) => {
+    onWriteStateChange?.(true)
+    updateCell(cellId, value)
+    setTimeout(() => onWriteStateChange?.(false), 300)
+  }, [updateCell, onWriteStateChange])
+
+  const getSelectedFormat = useMemo(() => {
+    if (selectedCells.size === 0) return {}
+    const firstCell = Array.from(selectedCells)[0]
+    return cells[firstCell]?.format || {}
+  }, [selectedCells, cells])
+
   const handleSelectCell = useCallback((cellId: string, multiSelect: boolean = false) => {
     selectCell(cellId, multiSelect)
     setActiveCellId(cellId)
@@ -63,16 +85,7 @@ export default function Spreadsheet({ docId }: { docId: string }) {
       const currentCell = cells[cellId] || { value: '' }
       updateCell(cellId, currentCell.value, { ...currentCell.format, ...format })
     })
-    addToHistory(cells)
-  }, [selectedCells, cells, updateCell, addToHistory])
-
-  const handleUndo = useCallback(() => {
-    undo()
-  }, [undo])
-
-  const handleRedo = useCallback(() => {
-    redo()
-  }, [redo])
+  }, [selectedCells, cells, updateCell])
 
   const handleResizeColumn = useCallback((colIndex: number, width: number) => {
     setColumnWidths(prev => ({ ...prev, [colIndex]: width }))
@@ -82,13 +95,7 @@ export default function Spreadsheet({ docId }: { docId: string }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'z' || e.key === 'Z') {
-          e.preventDefault()
-          handleUndo()
-        } else if (e.key === 'y' || e.key === 'Y') {
-          e.preventDefault()
-          handleRedo()
-        } else if (e.key === 'a' || e.key === 'A') {
+        if (e.key === 'a' || e.key === 'A') {
           e.preventDefault()
           const allCells = new Set<string>()
           for (let c = 0; c < COLS; c++) {
@@ -105,7 +112,7 @@ export default function Spreadsheet({ docId }: { docId: string }) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleUndo, handleRedo, selectCell, clearSelection])
+  }, [selectCell, clearSelection])
 
   const rows = Array.from({ length: ROWS })
   const cols = Array.from({ length: COLS })
@@ -132,11 +139,8 @@ export default function Spreadsheet({ docId }: { docId: string }) {
       {/* Toolbar */}
       <Toolbar
         selectedCount={selectedCells.size}
+        selectedFormat={getSelectedFormat}
         onFormat={handleFormat}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        canUndo={canUndo}
-        canRedo={canRedo}
       />
 
       {/* Selection Info */}
@@ -217,10 +221,7 @@ export default function Spreadsheet({ docId }: { docId: string }) {
                       isSelected={selectedCells.has(id)}
                       onSelect={handleSelectCell}
                       onRangeSelect={handleRangeSelect}
-                      updateCell={(cellId: string, value: string) => {
-                        updateCell(cellId, value)
-                        addToHistory(cells)
-                      }}
+                      updateCell={handleUpdateCell}
                     />
                   )
                 })}
