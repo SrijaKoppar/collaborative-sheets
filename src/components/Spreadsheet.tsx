@@ -34,21 +34,27 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     selectedCells,
     activeCellId,
     selectCell,
-    selectRange,
+    toggleCell,
+    extendTo,
+    selectAll,
     clearSelection,
-    extendSelection,
-    setActiveCellId,
     cellToCoords,
     coordsToCell
-  } = useSelection()
+  } = useSelection({ cols: COLS, rows: ROWS })
   const history = useHistory()
 
   const user = useSessionUser()
   const isLoading = user === null
   const [columnWidths, setColumnWidths] = useState<Record<number, number>>({})
 
+  // Which cell (if any) currently has an editable input, and its in-progress raw text.
+  const [editingCellId, setEditingCellId] = useState<string | null>(null)
+  const [draftValue, setDraftValue] = useState("")
+  const cursorModeRef = useRef<'end' | 'select-all'>('end')
+
   const isDraggingRef = useRef(false)
-  const cellRefs = useRef<Map<string, HTMLInputElement>>(new Map())
+  const containerRef = useRef<HTMLDivElement>(null)
+  const editingInputRef = useRef<HTMLInputElement>(null)
 
   const users = usePresence(
     docId,
@@ -73,10 +79,20 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     return () => window.removeEventListener('mouseup', handleMouseUp)
   }, [])
 
-  const setCellRef = useCallback((cellId: string, el: HTMLInputElement | null) => {
-    if (el) cellRefs.current.set(cellId, el)
-    else cellRefs.current.delete(cellId)
-  }, [])
+  // Whenever we enter edit mode, focus the cell's input and place the cursor
+  // (end of text, or select-all so typing immediately overwrites).
+  useEffect(() => {
+    if (editingCellId && editingInputRef.current) {
+      const input = editingInputRef.current
+      input.focus()
+      if (cursorModeRef.current === 'select-all') {
+        input.select()
+      } else {
+        const len = input.value.length
+        input.setSelectionRange(len, len)
+      }
+    }
+  }, [editingCellId])
 
   // Persist a single cell edit (writes to Firestore, flashes the "saving" indicator)
   const applyEdit = useCallback((cellId: string, raw: string, format?: CellFormat) => {
@@ -106,44 +122,91 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     return cells[firstCell]?.format || {}
   }, [selectedCells, cells])
 
-  const handleSelectCell = useCallback((cellId: string, multiSelect: boolean = false) => {
-    selectCell(cellId, multiSelect)
-    setActiveCellId(cellId)
-    // A plain (non-multi-select) click starts a potential drag-select.
-    isDraggingRef.current = !multiSelect
-  }, [selectCell, setActiveCellId])
+  // --- Edit mode -------------------------------------------------------
 
-  const handleRangeSelect = useCallback((startCellId: string, endCellId: string) => {
-    selectRange(startCellId, endCellId)
-  }, [selectRange])
+  const enterEditMode = useCallback((cellId: string, options?: { seed?: string; selectAllText?: boolean }) => {
+    setEditingCellId(cellId)
+    setDraftValue(options?.seed !== undefined ? options.seed : (cells[cellId]?.raw ?? ""))
+    cursorModeRef.current = options?.selectAllText ? 'select-all' : 'end'
+  }, [cells])
 
-  const handleDragEnter = useCallback((cellId: string) => {
-    if (isDraggingRef.current) {
-      extendSelection(cellId)
-      setActiveCellId(cellId)
-    }
-  }, [extendSelection, setActiveCellId])
-
-  const handleNavigate = useCallback((fromCellId: string, direction: NavigateDirection) => {
+  const computeNextCellId = useCallback((fromCellId: string, direction: NavigateDirection) => {
     const coords = cellToCoords(fromCellId)
-    if (!coords) return
-
+    if (!coords) return null
     let { col, row } = coords
     if (direction === 'up') row -= 1
     if (direction === 'down') row += 1
     if (direction === 'left') col -= 1
     if (direction === 'right') col += 1
+    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null
+    return coordsToCell(col, row)
+  }, [cellToCoords, coordsToCell])
 
-    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return // at the edge of the grid
+  // Commits the current draft (if any) and, optionally, moves the active cell afterward.
+  const commitEdit = useCallback((moveDirection?: NavigateDirection) => {
+    if (!editingCellId) return
+    const cellId = editingCellId
+    const value = draftValue
 
-    const nextId = coordsToCell(col, row)
-    selectCell(nextId, false)
-    setActiveCellId(nextId)
+    setEditingCellId(null)
+    setDraftValue("")
+    handleUpdateCell(cellId, value)
 
-    const nextInput = cellRefs.current.get(nextId)
-    nextInput?.focus()
-    nextInput?.select()
-  }, [cellToCoords, coordsToCell, selectCell, setActiveCellId])
+    if (moveDirection) {
+      const nextId = computeNextCellId(cellId, moveDirection)
+      if (nextId) selectCell(nextId)
+    }
+    containerRef.current?.focus()
+  }, [editingCellId, draftValue, handleUpdateCell, computeNextCellId, selectCell])
+
+  const cancelEdit = useCallback(() => {
+    setEditingCellId(null)
+    setDraftValue("")
+    containerRef.current?.focus()
+  }, [])
+
+  const handleEditKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      commitEdit(e.shiftKey ? 'up' : 'down')
+    } else if (e.key === 'Tab') {
+      e.preventDefault()
+      commitEdit(e.shiftKey ? 'left' : 'right')
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelEdit()
+    }
+    // Arrow keys are intentionally left alone here: while editing, they move
+    // the text cursor within the input rather than navigating cells.
+  }, [commitEdit, cancelEdit])
+
+  // --- Selection / mouse -------------------------------------------------
+
+  const handleCellMouseDown = useCallback((cellId: string, e: React.MouseEvent) => {
+    if (editingCellId === cellId) return // let the input handle its own click/cursor placement
+
+    if (e.shiftKey) {
+      extendTo(cellId)
+    } else if (e.ctrlKey || e.metaKey) {
+      toggleCell(cellId)
+    } else {
+      selectCell(cellId)
+      isDraggingRef.current = true
+    }
+
+    containerRef.current?.focus()
+  }, [editingCellId, extendTo, toggleCell, selectCell])
+
+  const handleCellMouseEnter = useCallback((cellId: string) => {
+    if (isDraggingRef.current) {
+      extendTo(cellId)
+    }
+  }, [extendTo])
+
+  const handleCellDoubleClick = useCallback((cellId: string) => {
+    selectCell(cellId)
+    enterEditMode(cellId)
+  }, [selectCell, enterEditMode])
 
   const handleFormat = useCallback((format: CellFormat) => {
     const edits: CellEdit[] = []
@@ -233,46 +296,67 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     }).catch(() => {})
   }, [activeCellId, cellToCoords, coordsToCell, cells, history, applyEdit])
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'a' || e.key === 'A') {
-          e.preventDefault()
-          const allCells = new Set<string>()
-          for (let c = 0; c < COLS; c++) {
-            for (let r = 0; r < ROWS; r++) {
-              allCells.add(`${colName(c)}${r + 1}`)
-            }
-          }
-          selectCell(Array.from(allCells)[0], false)
-        } else if (e.key === 'z' || e.key === 'Z') {
-          e.preventDefault()
-          if (e.shiftKey) {
-            handleRedo()
-          } else {
-            handleUndo()
-          }
-        } else if (e.key === 'y' || e.key === 'Y') {
-          e.preventDefault()
-          handleRedo()
-        } else if ((e.key === 'c' || e.key === 'C') && selectedCells.size > 1) {
-          // Only take over copy for genuine multi-cell ranges; a single selected
-          // cell still gets normal browser/text-input copy behavior.
-          e.preventDefault()
-          handleCopy()
-        } else if ((e.key === 'v' || e.key === 'V') && selectedCells.size > 1) {
-          e.preventDefault()
-          handlePaste()
-        }
-      } else if (e.key === 'Escape') {
-        clearSelection()
+  // --- Grid-level keyboard handling (only when not editing a cell) -------
+
+  const handleContainerKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (editingCellId) return // the cell's own input handles keys while editing
+
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === 'a' || e.key === 'A') {
+        e.preventDefault()
+        selectAll()
+      } else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault()
+        if (e.shiftKey) handleRedo(); else handleUndo()
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault()
+        handleRedo()
+      } else if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault()
+        handleCopy()
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault()
+        handlePaste()
       }
+      return
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectCell, clearSelection, handleUndo, handleRedo, handleCopy, handlePaste, selectedCells])
+    if (e.key === 'Escape') {
+      clearSelection()
+      return
+    }
+
+    if (!activeCellId) return
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      const direction: NavigateDirection =
+        e.key === 'ArrowUp' ? 'up' : e.key === 'ArrowDown' ? 'down' : e.key === 'ArrowLeft' ? 'left' : 'right'
+      const nextId = computeNextCellId(activeCellId, direction)
+      if (!nextId) return
+      if (e.shiftKey) extendTo(nextId)
+      else selectCell(nextId)
+    } else if (e.key === 'Tab') {
+      e.preventDefault()
+      const nextId = computeNextCellId(activeCellId, e.shiftKey ? 'left' : 'right')
+      if (nextId) selectCell(nextId)
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const nextId = computeNextCellId(activeCellId, e.shiftKey ? 'up' : 'down')
+      if (nextId) selectCell(nextId)
+      else enterEditMode(activeCellId) // no cell below/above: just start editing in place
+    } else if (e.key === 'F2') {
+      e.preventDefault()
+      enterEditMode(activeCellId)
+    } else if (e.key.length === 1 && !e.altKey) {
+      // Any other printable character: start editing this cell, replacing its content.
+      e.preventDefault()
+      enterEditMode(activeCellId, { seed: e.key })
+    }
+  }, [
+    editingCellId, activeCellId, selectAll, handleUndo, handleRedo, handleCopy, handlePaste,
+    extendTo, selectCell, enterEditMode, computeNextCellId, clearSelection
+  ])
 
   const rows = Array.from({ length: ROWS })
   const cols = Array.from({ length: COLS })
@@ -322,7 +406,12 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
       )}
 
       {/* Spreadsheet container */}
-      <div className="overflow-auto border border-slate-200 flex-1 bg-white relative">
+      <div
+        ref={containerRef}
+        tabIndex={0}
+        onKeyDown={handleContainerKeyDown}
+        className="overflow-auto border border-slate-200 flex-1 bg-white relative outline-none"
+      >
         <table className="border-collapse text-sm w-full">
 
           <thead className="sticky top-0 bg-slate-100 z-10">
@@ -375,21 +464,25 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
                 {cols.map((_, c) => {
                   const id = `${colName(c)}${r + 1}`
                   const cellData = cells[id]
+                  const isEditing = editingCellId === id
 
                   return (
                     <Cell
                       key={id}
+                      ref={isEditing ? editingInputRef : undefined}
                       cellId={id}
-                      raw={cellData?.raw || ""}
                       display={cellData?.display ?? cellData?.raw ?? ""}
                       format={cellData?.format}
+                      isActive={activeCellId === id}
                       isSelected={selectedCells.has(id)}
-                      onSelect={handleSelectCell}
-                      onRangeSelect={handleRangeSelect}
-                      onDragEnter={handleDragEnter}
-                      onNavigate={handleNavigate}
-                      updateCell={handleUpdateCell}
-                      inputRef={(el) => setCellRef(id, el)}
+                      isEditing={isEditing}
+                      draftValue={isEditing ? draftValue : ""}
+                      onDraftChange={setDraftValue}
+                      onCommitEdit={() => commitEdit()}
+                      onMouseDown={handleCellMouseDown}
+                      onMouseEnter={handleCellMouseEnter}
+                      onDoubleClick={handleCellDoubleClick}
+                      onEditKeyDown={handleEditKeyDown}
                     />
                   )
                 })}
