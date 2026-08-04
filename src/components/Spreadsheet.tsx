@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react"
-import Cell from "./Cell"
+import Cell, { formulaErrorMessage } from "./Cell"
 import Toolbar from "./Toolbar"
+import FormulaBar from "./FormulaBar"
 import { useSpreadsheet } from "@/hooks/useSpreadsheet"
 import { usePresence } from "@/hooks/usePresence"
 import { useSelection } from "@/hooks/useSelection"
@@ -51,6 +52,10 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   const [editingCellId, setEditingCellId] = useState<string | null>(null)
   const [draftValue, setDraftValue] = useState("")
   const cursorModeRef = useRef<'end' | 'select-all'>('end')
+  // Tracks which UI actually initiated the current edit, so the focus effect
+  // below only steals focus into the grid's input when editing started there
+  // (not when the user is typing directly in the formula bar).
+  const editFocusTargetRef = useRef<'grid' | 'formula-bar'>('grid')
 
   const isDraggingRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -82,7 +87,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   // Whenever we enter edit mode, focus the cell's input and place the cursor
   // (end of text, or select-all so typing immediately overwrites).
   useEffect(() => {
-    if (editingCellId && editingInputRef.current) {
+    if (editingCellId && editFocusTargetRef.current === 'grid' && editingInputRef.current) {
       const input = editingInputRef.current
       input.focus()
       if (cursorModeRef.current === 'select-all') {
@@ -125,6 +130,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   // --- Edit mode -------------------------------------------------------
 
   const enterEditMode = useCallback((cellId: string, options?: { seed?: string; selectAllText?: boolean }) => {
+    editFocusTargetRef.current = 'grid'
     setEditingCellId(cellId)
     setDraftValue(options?.seed !== undefined ? options.seed : (cells[cellId]?.raw ?? ""))
     cursorModeRef.current = options?.selectAllText ? 'select-all' : 'end'
@@ -207,6 +213,51 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     selectCell(cellId)
     enterEditMode(cellId)
   }, [selectCell, enterEditMode])
+
+  // --- Formula bar ---------------------------------------------------
+
+  // Focusing the formula bar (when the active cell isn't already being
+  // edited) starts editing that cell, seeded with its current raw value.
+  // The actual typing happens in the formula bar's own input, so we don't
+  // touch editFocusTargetRef/cursor placement here - see the focus effect above.
+  const handleFormulaBarFocus = useCallback(() => {
+    if (!activeCellId) return
+    if (editingCellId !== activeCellId) {
+      editFocusTargetRef.current = 'formula-bar'
+      setEditingCellId(activeCellId)
+      setDraftValue(cells[activeCellId]?.raw ?? "")
+    }
+  }, [activeCellId, editingCellId, cells])
+
+  const handleFormulaBarChange = useCallback((value: string) => {
+    if (activeCellId && editingCellId !== activeCellId) {
+      editFocusTargetRef.current = 'formula-bar'
+      setEditingCellId(activeCellId)
+    }
+    setDraftValue(value)
+  }, [activeCellId, editingCellId])
+
+  const handleFormulaBarCommit = useCallback(() => {
+    commitEdit('down')
+  }, [commitEdit])
+
+  const handleFormulaBarBlur = useCallback(() => {
+    commitEdit()
+  }, [commitEdit])
+
+  const handleFormulaBarCancel = useCallback(() => {
+    cancelEdit()
+  }, [cancelEdit])
+
+  const formulaBarValue = editingCellId === activeCellId && activeCellId
+    ? draftValue
+    : (activeCellId ? cells[activeCellId]?.raw ?? "" : "")
+
+  const formulaBarError = useMemo(() => {
+    if (!activeCellId || editingCellId === activeCellId) return undefined
+    const display = cells[activeCellId]?.display
+    return display?.startsWith("#") ? formulaErrorMessage(display) : undefined
+  }, [activeCellId, editingCellId, cells])
 
   const handleFormat = useCallback((format: CellFormat) => {
     const edits: CellEdit[] = []
@@ -390,6 +441,17 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
         onRedo={handleRedo}
         canUndo={history.canUndo}
         canRedo={history.canRedo}
+      />
+
+      <FormulaBar
+        activeCellId={activeCellId}
+        value={formulaBarValue}
+        onChange={handleFormulaBarChange}
+        onFocusEdit={handleFormulaBarFocus}
+        onCommit={handleFormulaBarCommit}
+        onCancel={handleFormulaBarCancel}
+        onBlurCommit={handleFormulaBarBlur}
+        errorMessage={formulaBarError}
       />
 
       {/* Selection Info */}

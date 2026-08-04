@@ -101,7 +101,7 @@ const Cell = forwardRef<HTMLInputElement, Props>(function Cell({
 
 export default Cell
 
-function formulaErrorMessage(code: string): string {
+export function formulaErrorMessage(code: string): string {
   switch (code) {
     case "#CYCLE!": return "Circular reference detected"
     case "#REF!": return "Invalid cell reference"
