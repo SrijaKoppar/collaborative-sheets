@@ -38,6 +38,10 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     toggleCell,
     extendTo,
     selectAll,
+    selectRowRange,
+    selectColumnRange,
+    selectionBounds,
+    isRectangularSelection,
     clearSelection,
     cellToCoords,
     coordsToCell
@@ -234,6 +238,30 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     enterEditMode(cellId)
   }, [selectCell, enterEditMode])
 
+  const handleRowHeaderMouseDown = useCallback((row: number, e: React.MouseEvent) => {
+    selectRowRange(row, e.shiftKey)
+    containerRef.current?.focus()
+  }, [selectRowRange])
+
+  const handleColumnHeaderMouseDown = useCallback((col: number, e: React.MouseEvent) => {
+    selectColumnRange(col, e.shiftKey)
+    containerRef.current?.focus()
+  }, [selectColumnRange])
+
+  const isRowFullySelected = useCallback((row: number) => {
+    for (let col = 0; col < COLS; col++) {
+      if (!selectedCells.has(coordsToCell(col, row))) return false
+    }
+    return true
+  }, [selectedCells, coordsToCell])
+
+  const isColumnFullySelected = useCallback((col: number) => {
+    for (let row = 0; row < ROWS; row++) {
+      if (!selectedCells.has(coordsToCell(col, row))) return false
+    }
+    return true
+  }, [selectedCells, coordsToCell])
+
   // --- Formula bar ---------------------------------------------------
 
   // Focusing the formula bar (when the active cell isn't already being
@@ -278,6 +306,17 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     const display = cells[activeCellId]?.display
     return display?.startsWith("#") ? formulaErrorMessage(display) : undefined
   }, [activeCellId, editingCellId, cells])
+
+  // Show "A1:C5" for a simple rectangular multi-cell selection, otherwise
+  // just the active cell's own address (matches how spreadsheets' Name Box behaves).
+  const selectionAddress = useMemo(() => {
+    if (selectedCells.size > 1 && isRectangularSelection && selectionBounds) {
+      const start = coordsToCell(selectionBounds.minCol, selectionBounds.minRow)
+      const end = coordsToCell(selectionBounds.maxCol, selectionBounds.maxRow)
+      return `${start}:${end}`
+    }
+    return activeCellId || ""
+  }, [selectedCells, isRectangularSelection, selectionBounds, coordsToCell, activeCellId])
 
   const handleFormat = useCallback((format: CellFormat) => {
     const edits: CellEdit[] = []
@@ -481,6 +520,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
         selectedFormat={getSelectedFormat}
         onFormat={handleFormat}
         onClearFormat={handleClearFormat}
+        onClearSelection={clearSelection}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={history.canUndo}
@@ -488,7 +528,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
       />
 
       <FormulaBar
-        activeCellId={activeCellId}
+        activeCellId={selectionAddress}
         value={formulaBarValue}
         onChange={handleFormulaBarChange}
         onFocusEdit={handleFormulaBarFocus}
@@ -497,19 +537,6 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
         onBlurCommit={handleFormulaBarBlur}
         errorMessage={formulaBarError}
       />
-
-      {/* Selection Info */}
-      {selectedCells.size > 0 && (
-        <div className="px-4 py-2 bg-blue-50 border-b border-blue-200 text-sm text-slate-600 flex items-center justify-between">
-          <span>{selectedCells.size} cell{selectedCells.size !== 1 ? 's' : ''} selected</span>
-          <button
-            onClick={clearSelection}
-            className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-          >
-            Clear
-          </button>
-        </div>
-      )}
 
       {/* Spreadsheet container */}
       <div
@@ -522,20 +549,30 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
 
           <thead className="sticky top-0 bg-slate-100 z-10">
             <tr>
-              <th className="w-12 border border-slate-200 bg-slate-100 text-slate-600 font-semibold"></th>
+              <th
+                onMouseDown={() => selectAll()}
+                title="Select all"
+                className="w-12 border border-slate-200 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              ></th>
 
               {cols.map((_, c) => {
                 const width = columnWidths[c] || 112
                 return (
                   <th
                     key={c}
-                    className="border border-slate-200 px-3 py-2.5 text-slate-700 font-semibold text-center h-10 relative"
+                    onMouseDown={(e) => handleColumnHeaderMouseDown(c, e)}
+                    className={`border px-3 py-2.5 font-semibold text-center h-10 relative cursor-pointer select-none ${
+                      isColumnFullySelected(c)
+                        ? 'border-blue-300 bg-blue-100 text-blue-700'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-200'
+                    }`}
                     style={{ width: `${width}px`, minWidth: `${width}px` }}
                   >
                     {colName(c)}
                     <div
                       className="absolute right-0 top-0 w-1 h-full cursor-col-resize hover:bg-blue-500 hover:w-1.5 transition-all"
                       onMouseDown={(e) => {
+                        e.stopPropagation() // don't also trigger column selection
                         const startX = e.clientX
                         const startWidth = width
 
@@ -563,7 +600,14 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
           <tbody>
             {rows.map((_, r) => (
               <tr key={r}>
-                <td className="border border-slate-200 text-slate-500 bg-slate-50 text-center w-12 h-9 font-medium text-xs sticky left-0 z-20">
+                <td
+                  onMouseDown={(e) => handleRowHeaderMouseDown(r, e)}
+                  className={`border text-center w-12 h-9 font-medium text-xs sticky left-0 z-20 cursor-pointer select-none ${
+                    isRowFullySelected(r)
+                      ? 'border-blue-300 bg-blue-100 text-blue-700'
+                      : 'border-slate-200 text-slate-500 bg-slate-50 hover:bg-slate-200'
+                  }`}
+                >
                   {r + 1}
                 </td>
 

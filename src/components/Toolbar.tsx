@@ -9,6 +9,7 @@ interface ToolbarProps {
   selectedFormat?: CellFormat
   onFormat?: (format: CellFormat) => void
   onClearFormat?: () => void
+  onClearSelection?: () => void
   onUndo?: () => void
   onRedo?: () => void
   canUndo?: boolean
@@ -20,6 +21,7 @@ export default function Toolbar({
   selectedFormat = {},
   onFormat,
   onClearFormat,
+  onClearSelection,
   onUndo,
   onRedo,
   canUndo = false,
@@ -230,12 +232,19 @@ export default function Toolbar({
       </button>
 
       {/* Selection indicator */}
-      {selectedCount > 0 && (
+      {selectedCount > 1 && (
         <>
           <div className="w-px bg-slate-200 h-6 mx-1"></div>
-          <span className="text-xs text-slate-500 px-2">
-            {selectedCount} cell{selectedCount > 1 ? 's' : ''} selected
+          <span className="text-xs text-slate-500 pl-2">
+            {selectedCount} cells selected
           </span>
+          <button
+            onClick={onClearSelection}
+            title="Clear selection (Esc)"
+            className="text-xs text-blue-600 hover:text-blue-700 font-medium px-2"
+          >
+            Clear
+          </button>
         </>
       )}
 
