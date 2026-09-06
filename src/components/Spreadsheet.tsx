@@ -60,6 +60,11 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   const isDraggingRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const editingInputRef = useRef<HTMLInputElement>(null)
+  // Guards against the edit-ending focus shift (below) re-triggering itself:
+  // committing/canceling calls containerRef.focus(), which blurs the still-
+  // mounted cell input, which would otherwise fire onBlur -> commitEdit()
+  // a second time (or override a cancel with an unwanted commit).
+  const isEndingEditRef = useRef(false)
 
   const users = usePresence(
     docId,
@@ -150,7 +155,9 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
 
   // Commits the current draft (if any) and, optionally, moves the active cell afterward.
   const commitEdit = useCallback((moveDirection?: NavigateDirection) => {
-    if (!editingCellId) return
+    if (!editingCellId || isEndingEditRef.current) return
+    isEndingEditRef.current = true
+
     const cellId = editingCellId
     const value = draftValue
 
@@ -163,12 +170,25 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
       if (nextId) selectCell(nextId)
     }
     containerRef.current?.focus()
+
+    // Release the guard on the next tick, once any same-edit blur has had a
+    // chance to occur and be safely no-op'd above; a later, genuinely new
+    // edit will always start from a fresh call anyway.
+    setTimeout(() => { isEndingEditRef.current = false }, 0)
   }, [editingCellId, draftValue, handleUpdateCell, computeNextCellId, selectCell])
 
   const cancelEdit = useCallback(() => {
+    // Same guard as commitEdit: focusing the container below blurs the still-
+    // mounted input, which would otherwise trigger onBlur -> commitEdit() and
+    // commit the very draft Escape is meant to discard.
+    if (isEndingEditRef.current) return
+    isEndingEditRef.current = true
+
     setEditingCellId(null)
     setDraftValue("")
     containerRef.current?.focus()
+
+    setTimeout(() => { isEndingEditRef.current = false }, 0)
   }, [])
 
   const handleEditKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -292,6 +312,27 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     edits.forEach(edit => applyEdit(edit.cellId, edit.nextRaw, edit.nextFormat))
   }, [selectedCells, cells, history, applyEdit])
 
+  // Delete/Backspace: clear the content of every selected cell, keeping formatting.
+  const handleClearSelectedCells = useCallback(() => {
+    const edits: CellEdit[] = []
+    selectedCells.forEach(cellId => {
+      const currentCell = cells[cellId]
+      const prevRaw = currentCell?.raw ?? ""
+      if (prevRaw === "") return // already empty, nothing to clear
+
+      edits.push({
+        cellId,
+        prevRaw,
+        prevFormat: currentCell?.format,
+        nextRaw: "",
+        nextFormat: currentCell?.format
+      })
+    })
+    if (edits.length === 0) return
+    history.record(edits)
+    edits.forEach(edit => applyEdit(edit.cellId, edit.nextRaw, edit.nextFormat))
+  }, [selectedCells, cells, history, applyEdit])
+
   const handleUndo = useCallback(() => {
     history.undo(applyEdit)
   }, [history, applyEdit])
@@ -399,6 +440,9 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     } else if (e.key === 'F2') {
       e.preventDefault()
       enterEditMode(activeCellId)
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault()
+      handleClearSelectedCells()
     } else if (e.key.length === 1 && !e.altKey) {
       // Any other printable character: start editing this cell, replacing its content.
       e.preventDefault()
@@ -406,7 +450,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     }
   }, [
     editingCellId, activeCellId, selectAll, handleUndo, handleRedo, handleCopy, handlePaste,
-    extendTo, selectCell, enterEditMode, computeNextCellId, clearSelection
+    extendTo, selectCell, enterEditMode, computeNextCellId, clearSelection, handleClearSelectedCells
   ])
 
   const rows = Array.from({ length: ROWS })
