@@ -16,8 +16,10 @@ const ROWS = 30
 const COLS = 20
 const DEFAULT_COLUMN_WIDTH = 112
 const MIN_COLUMN_WIDTH = 50
+const MAX_COLUMN_WIDTH = 400
 const DEFAULT_ROW_HEIGHT = 36
 const MIN_ROW_HEIGHT = 24
+const MAX_ROW_HEIGHT = 120
 const LAYOUT_SAVE_DELAY_MS = 350
 
 function colName(index: number) {
@@ -61,8 +63,19 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
 
   const user = useSessionUser()
   const isLoading = user === null
-  const [columnWidths, setColumnWidths] = useState<Record<number, number>>({})
-  const [rowHeights, setRowHeights] = useState<Record<number, number>>({})
+  const [columnWidthOverrides, setColumnWidthOverrides] = useState<Record<number, number>>({})
+  const [rowHeightOverrides, setRowHeightOverrides] = useState<Record<number, number>>({})
+  // Confirmed Firestore layout, with any in-flight local resize overlaid on
+  // top - avoids mirroring `layout` into local state (and needing an effect
+  // to keep it in sync) purely to add optimistic updates during a drag.
+  const columnWidths = useMemo(
+    () => ({ ...layout.columnWidths, ...columnWidthOverrides }),
+    [layout.columnWidths, columnWidthOverrides]
+  )
+  const rowHeights = useMemo(
+    () => ({ ...layout.rowHeights, ...rowHeightOverrides }),
+    [layout.rowHeights, rowHeightOverrides]
+  )
 
   // Which cell (if any) currently has an editable input, and its in-progress raw text.
   const [editingCellId, setEditingCellId] = useState<string | null>(null)
@@ -100,14 +113,6 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   useEffect(() => {
     onUsersChange?.(users)
   }, [users, onUsersChange])
-
-  useEffect(() => {
-    setColumnWidths(layout.columnWidths)
-  }, [layout.columnWidths])
-
-  useEffect(() => {
-    setRowHeights(layout.rowHeights)
-  }, [layout.rowHeights])
 
   useEffect(() => {
     return () => {
@@ -468,20 +473,22 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   }, [history, persistEdits])
 
   const handleResizeColumn = useCallback((colIndex: number, width: number) => {
-    setColumnWidths(prev => {
-      const next = { ...prev, [colIndex]: width }
-      scheduleLayoutSave({ columnWidths: next, rowHeights })
+    const clamped = Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, width))
+    setColumnWidthOverrides(prev => {
+      const next = { ...prev, [colIndex]: clamped }
+      scheduleLayoutSave({ columnWidths: { ...layout.columnWidths, ...next }, rowHeights })
       return next
     })
-  }, [scheduleLayoutSave, rowHeights])
+  }, [scheduleLayoutSave, layout.columnWidths, rowHeights])
 
   const handleResizeRow = useCallback((rowIndex: number, height: number) => {
-    setRowHeights(prev => {
-      const next = { ...prev, [rowIndex]: height }
-      scheduleLayoutSave({ columnWidths, rowHeights: next })
+    const clamped = Math.min(MAX_ROW_HEIGHT, Math.max(MIN_ROW_HEIGHT, height))
+    setRowHeightOverrides(prev => {
+      const next = { ...prev, [rowIndex]: clamped }
+      scheduleLayoutSave({ columnWidths, rowHeights: { ...layout.rowHeights, ...next } })
       return next
     })
-  }, [scheduleLayoutSave, columnWidths])
+  }, [scheduleLayoutSave, columnWidths, layout.rowHeights])
 
   const handleCopy = useCallback(() => {
     const tsv = buildRangeTSV(selectedCells, cells, cellToCoords, coordsToCell)
@@ -655,7 +662,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
               ></th>
 
               {cols.map((_, c) => {
-                const width = columnWidths[c] || 112
+                const width = columnWidths[c] || DEFAULT_COLUMN_WIDTH
                 return (
                   <th
                     key={c}
@@ -697,17 +704,42 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
           </thead>
 
           <tbody>
-            {rows.map((_, r) => (
+            {rows.map((_, r) => {
+              const height = rowHeights[r] || DEFAULT_ROW_HEIGHT
+              return (
               <tr key={r}>
                 <td
                   onMouseDown={(e) => handleRowHeaderMouseDown(r, e)}
-                  className={`border text-center w-12 h-9 font-medium text-xs sticky left-0 z-20 cursor-pointer select-none ${
+                  className={`border text-center w-12 font-medium text-xs sticky left-0 z-20 cursor-pointer select-none relative ${
                     isRowFullySelected(r)
                       ? 'border-blue-300 bg-blue-100 text-blue-700'
                       : 'border-slate-200 text-slate-500 bg-slate-50 hover:bg-slate-200'
                   }`}
+                  style={{ height: `${height}px` }}
                 >
                   {r + 1}
+                  <div
+                    className="absolute left-0 bottom-0 w-full h-1 cursor-row-resize hover:bg-blue-500 hover:h-1.5 transition-all"
+                    onMouseDown={(e) => {
+                      e.stopPropagation() // don't also trigger row selection
+                      const startY = e.clientY
+                      const startHeight = height
+
+                      const handleMouseMove = (moveEvent: MouseEvent) => {
+                        const delta = moveEvent.clientY - startY
+                        const newHeight = Math.max(MIN_ROW_HEIGHT, startHeight + delta)
+                        handleResizeRow(r, newHeight)
+                      }
+
+                      const handleMouseUp = () => {
+                        document.removeEventListener('mousemove', handleMouseMove)
+                        document.removeEventListener('mouseup', handleMouseUp)
+                      }
+
+                      document.addEventListener('mousemove', handleMouseMove)
+                      document.addEventListener('mouseup', handleMouseUp)
+                    }}
+                  />
                 </td>
 
                 {cols.map((_, c) => {
@@ -722,6 +754,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
                       cellId={id}
                       display={cellData?.display ?? cellData?.raw ?? ""}
                       format={cellData?.format}
+                      height={height}
                       isActive={activeCellId === id}
                       isSelected={selectedCells.has(id)}
                       isEditing={isEditing}
@@ -736,7 +769,8 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
                   )
                 })}
               </tr>
-            ))}
+              )
+            })}
           </tbody>
 
         </table>

@@ -12,15 +12,18 @@ export interface CellEdit {
 }
 
 type HistoryAction = CellEdit[]
-type ApplyFn = (cellId: string, raw: string, format?: CellFormat) => void
 
 /**
  * A per-tab undo/redo stack for cell edits. Deliberately per-user/per-tab
  * rather than a single global document history: it only tracks edits made
  * locally, and undoing replays the previous raw value/format for exactly the
- * cells this user changed (via the `apply` callback, which persists to
- * Firestore), rather than snapshotting and restoring the whole sheet - which
- * would risk clobbering concurrent edits from collaborators.
+ * cells this user changed (persisted by the caller), rather than snapshotting
+ * and restoring the whole sheet - which would risk clobbering concurrent
+ * edits from collaborators.
+ *
+ * `takeUndoAction`/`takeRedoAction` hand back the whole action (every edit
+ * it contains) in one call, so the caller can write them all back in a
+ * single batched Firestore write regardless of how many cells were touched.
  */
 export function useHistory() {
   const [canUndo, setCanUndo] = useState(false)
@@ -34,29 +37,6 @@ export function useHistory() {
     redoStack.current = []
     setCanUndo(true)
     setCanRedo(false)
-  }, [])
-
-  const undo = useCallback((apply: ApplyFn) => {
-    const action = undoStack.current.pop()
-    if (!action) return
-    for (let i = action.length - 1; i >= 0; i--) {
-      const edit = action[i]
-      apply(edit.cellId, edit.prevRaw, edit.prevFormat)
-    }
-    redoStack.current.push(action)
-    setCanUndo(undoStack.current.length > 0)
-    setCanRedo(true)
-  }, [])
-
-  const redo = useCallback((apply: ApplyFn) => {
-    const action = redoStack.current.pop()
-    if (!action) return
-    for (const edit of action) {
-      apply(edit.cellId, edit.nextRaw, edit.nextFormat)
-    }
-    undoStack.current.push(action)
-    setCanRedo(redoStack.current.length > 0)
-    setCanUndo(true)
   }, [])
 
   const takeUndoAction = useCallback((): HistoryAction | null => {
@@ -77,5 +57,5 @@ export function useHistory() {
     return action
   }, [])
 
-  return { record, undo, redo, takeUndoAction, takeRedoAction, canUndo, canRedo }
+  return { record, takeUndoAction, takeRedoAction, canUndo, canRedo }
 }

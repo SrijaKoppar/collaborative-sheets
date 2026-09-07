@@ -7,6 +7,7 @@ interface Props {
   cellId: string
   display: string
   format?: CellFormat
+  height: number
   isActive: boolean
   isSelected: boolean
   isEditing: boolean
@@ -31,6 +32,7 @@ const Cell = forwardRef<HTMLInputElement, Props>(function Cell({
   cellId,
   display,
   format = {},
+  height,
   isActive,
   isSelected,
   isEditing,
@@ -51,7 +53,8 @@ const Cell = forwardRef<HTMLInputElement, Props>(function Cell({
     textAlign: format.textAlign || 'left',
     fontSize: format.fontSize ? `${format.fontSize}px` : '14px',
     fontWeight: format.bold ? 'bold' : 'normal',
-    fontStyle: format.italic ? 'italic' : 'normal'
+    fontStyle: format.italic ? 'italic' : 'normal',
+    height: `${height}px`
   }
 
   const borderClass = isActive
@@ -62,7 +65,7 @@ const Cell = forwardRef<HTMLInputElement, Props>(function Cell({
 
   return (
     <td
-      className={`${borderClass} transition-colors duration-100 h-9 relative p-0 select-none`}
+      className={`${borderClass} transition-colors duration-100 relative p-0 select-none`}
       onMouseDown={(e) => onMouseDown(cellId, e)}
       onMouseEnter={() => onMouseEnter(cellId)}
       onDoubleClick={() => onDoubleClick(cellId)}
