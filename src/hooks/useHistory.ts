@@ -59,5 +59,23 @@ export function useHistory() {
     setCanUndo(true)
   }, [])
 
-  return { record, undo, redo, canUndo, canRedo }
+  const takeUndoAction = useCallback((): HistoryAction | null => {
+    const action = undoStack.current.pop()
+    if (!action) return null
+    redoStack.current.push(action)
+    setCanUndo(undoStack.current.length > 0)
+    setCanRedo(true)
+    return action
+  }, [])
+
+  const takeRedoAction = useCallback((): HistoryAction | null => {
+    const action = redoStack.current.pop()
+    if (!action) return null
+    undoStack.current.push(action)
+    setCanRedo(redoStack.current.length > 0)
+    setCanUndo(true)
+    return action
+  }, [])
+
+  return { record, undo, redo, takeUndoAction, takeRedoAction, canUndo, canRedo }
 }

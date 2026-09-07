@@ -3,11 +3,17 @@
 import Spreadsheet from "@/components/Spreadsheet"
 import DocumentHeader from "@/components/DocumentHeader"
 import Link from "next/link"
-import { useState, use, useRef, useEffect } from "react"
+import { useState, use, useEffect } from "react"
 import { onAuthStateChanged, User } from "firebase/auth"
 import { auth } from "@/lib/firebase"
 import { useDocument } from "@/hooks/useDocument"
 import { CellData, UserPresence } from "@/types/spreadsheet"
+
+interface WriteState {
+  isWriting: boolean
+  lastSaved?: Date
+  error?: string | null
+}
 
 export default function Page({
   params,
@@ -20,9 +26,8 @@ export default function Page({
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null)
   const [username, setUsername] = useState("Guest User")
   const [cells, setCells] = useState<Record<string, CellData>>({})
-  const [isWriting, setIsWriting] = useState(false)
+  const [writeState, setWriteState] = useState<WriteState>({ isWriting: false })
   const [users, setUsers] = useState<UserPresence[]>([])
-  const writeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -74,7 +79,9 @@ export default function Page({
         onTitleChange={setTitle}
         username={username}
         cells={cells}
-        isSaving={isWriting}
+        isSaving={writeState.isWriting}
+        lastSaved={writeState.lastSaved}
+        saveError={writeState.error}
         users={users}
         currentUser={firebaseUser ? {
           displayName: firebaseUser.displayName,
@@ -89,13 +96,7 @@ export default function Page({
           docId={id}
           onCellsChange={setCells}
           onUsersChange={setUsers}
-          onWriteStateChange={(isWriting) => {
-            setIsWriting(isWriting)
-            if (writeTimeoutRef.current) clearTimeout(writeTimeoutRef.current)
-            if (isWriting) {
-              writeTimeoutRef.current = setTimeout(() => setIsWriting(false), 500)
-            }
-          }}
+          onWriteStateChange={setWriteState}
         />
       </main>
     </div>

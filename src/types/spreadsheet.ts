@@ -21,6 +21,7 @@ export interface DocumentData {
   updatedAt: number
   cells: Cells
   columnWidths?: Record<string, number>
+  rowHeights?: Record<string, number>
 }
 
 export interface UserPresence {

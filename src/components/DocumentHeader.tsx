@@ -19,6 +19,7 @@ interface DocumentHeaderProps {
   users?: UserPresence[]
   isSaving?: boolean
   lastSaved?: Date
+  saveError?: string | null
   username?: string
   cells?: Record<string, CellData>
   currentUser?: UserInfo | null
@@ -30,6 +31,7 @@ export default function DocumentHeader({
   users = [],
   isSaving = false,
   lastSaved,
+  saveError = null,
   username = "Guest User",
   cells = {},
   currentUser
@@ -96,7 +98,7 @@ export default function DocumentHeader({
           {/* Status Section */}
           <div className="flex items-center gap-6">
             {/* Write State Indicator */}
-            <WriteStateIndicator isWriting={isSaving} lastSaved={lastSaved} />
+            <WriteStateIndicator isWriting={isSaving} lastSaved={lastSaved} error={saveError} />
 
             {/* Export Menu */}
             <ExportMenu cells={cells} title={title} />

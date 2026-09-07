@@ -3,23 +3,37 @@
 interface WriteStateIndicatorProps {
   isWriting?: boolean
   lastSaved?: Date
+  error?: string | null
 }
 
 export default function WriteStateIndicator({
   isWriting = false,
-  lastSaved
+  lastSaved,
+  error = null
 }: WriteStateIndicatorProps) {
 
   const showSaving = isWriting
-  const displayText = isWriting
+  const displayText = error
+    ? "Save failed"
+    : isWriting
     ? "Saving..."
     : lastSaved
       ? `Saved at ${lastSaved.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
       : "All changes saved"
 
   return (
-    <div className="flex items-center gap-2 text-xs text-slate-500">
-      {showSaving ? (
+    <div
+      className="flex items-center gap-2 text-xs text-slate-500"
+      title={error || undefined}
+    >
+      {error ? (
+        <>
+          <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span className="text-red-700">{displayText}</span>
+        </>
+      ) : showSaving ? (
         <>
           <div className="animate-spin">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -14,6 +14,11 @@ import { CellFormat, Cells, UserPresence } from "@/types/spreadsheet"
 
 const ROWS = 30
 const COLS = 20
+const DEFAULT_COLUMN_WIDTH = 112
+const MIN_COLUMN_WIDTH = 50
+const DEFAULT_ROW_HEIGHT = 36
+const MIN_ROW_HEIGHT = 24
+const LAYOUT_SAVE_DELAY_MS = 350
 
 function colName(index: number) {
   return String.fromCharCode(65 + index)
@@ -24,13 +29,19 @@ type NavigateDirection = 'up' | 'down' | 'left' | 'right'
 interface SpreadsheetProps {
   docId: string
   onCellsChange?: (cells: Cells) => void
-  onWriteStateChange?: (isWriting: boolean) => void
+  onWriteStateChange?: (state: WriteState) => void
   onUsersChange?: (users: UserPresence[]) => void
+}
+
+interface WriteState {
+  isWriting: boolean
+  lastSaved?: Date
+  error?: string | null
 }
 
 export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, onUsersChange }: SpreadsheetProps) {
 
-  const { cells, updateCell } = useSpreadsheet(docId)
+  const { cells, layout, updateCellsBatch, updateFormatBatch, clearCellsBatch, updateLayout } = useSpreadsheet(docId)
   const {
     selectedCells,
     activeCellId,
@@ -51,6 +62,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   const user = useSessionUser()
   const isLoading = user === null
   const [columnWidths, setColumnWidths] = useState<Record<number, number>>({})
+  const [rowHeights, setRowHeights] = useState<Record<number, number>>({})
 
   // Which cell (if any) currently has an editable input, and its in-progress raw text.
   const [editingCellId, setEditingCellId] = useState<string | null>(null)
@@ -64,6 +76,9 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   const isDraggingRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const editingInputRef = useRef<HTMLInputElement>(null)
+  const pendingWritesRef = useRef(0)
+  const lastSavedRef = useRef<Date | undefined>(undefined)
+  const layoutSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Guards against the edit-ending focus shift (below) re-triggering itself:
   // committing/canceling calls containerRef.focus(), which blurs the still-
   // mounted cell input, which would otherwise fire onBlur -> commitEdit()
@@ -85,6 +100,20 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
   useEffect(() => {
     onUsersChange?.(users)
   }, [users, onUsersChange])
+
+  useEffect(() => {
+    setColumnWidths(layout.columnWidths)
+  }, [layout.columnWidths])
+
+  useEffect(() => {
+    setRowHeights(layout.rowHeights)
+  }, [layout.rowHeights])
+
+  useEffect(() => {
+    return () => {
+      if (layoutSaveTimeoutRef.current) clearTimeout(layoutSaveTimeoutRef.current)
+    }
+  }, [])
 
   // Stop drag-select whenever the mouse button is released anywhere on the page
   useEffect(() => {
@@ -108,12 +137,56 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     }
   }, [editingCellId])
 
-  // Persist a single cell edit (writes to Firestore, flashes the "saving" indicator)
-  const applyEdit = useCallback((cellId: string, raw: string, format?: CellFormat) => {
-    onWriteStateChange?.(true)
-    updateCell(cellId, raw, format)
-    setTimeout(() => onWriteStateChange?.(false), 300)
-  }, [updateCell, onWriteStateChange])
+  const writeErrorMessage = (error: unknown) => {
+    return error instanceof Error ? error.message : "Unable to save changes"
+  }
+
+  const runWrite = useCallback(async (write: () => Promise<void>) => {
+    pendingWritesRef.current += 1
+    onWriteStateChange?.({
+      isWriting: true,
+      lastSaved: lastSavedRef.current,
+      error: null
+    })
+
+    try {
+      await write()
+      lastSavedRef.current = new Date()
+      pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1)
+      onWriteStateChange?.({
+        isWriting: pendingWritesRef.current > 0,
+        lastSaved: lastSavedRef.current,
+        error: null
+      })
+    } catch (error) {
+      pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1)
+      onWriteStateChange?.({
+        isWriting: pendingWritesRef.current > 0,
+        lastSaved: lastSavedRef.current,
+        error: writeErrorMessage(error)
+      })
+    }
+  }, [onWriteStateChange])
+
+  const scheduleLayoutSave = useCallback((nextLayout: { columnWidths?: Record<number, number>; rowHeights?: Record<number, number> }) => {
+    if (layoutSaveTimeoutRef.current) clearTimeout(layoutSaveTimeoutRef.current)
+    layoutSaveTimeoutRef.current = setTimeout(() => {
+      layoutSaveTimeoutRef.current = null
+      void runWrite(() => updateLayout(nextLayout))
+    }, LAYOUT_SAVE_DELAY_MS)
+  }, [runWrite, updateLayout])
+
+  const persistEdits = useCallback((edits: CellEdit[], direction: 'next' | 'prev' = 'next') => {
+    if (edits.length === 0) return
+
+    void runWrite(() => updateCellsBatch(edits.map((edit) => ({
+      cellId: edit.cellId,
+      raw: direction === 'next' ? edit.nextRaw : edit.prevRaw,
+      format: edit.prevFormat !== undefined || edit.nextFormat !== undefined
+        ? (direction === 'next' ? edit.nextFormat ?? {} : edit.prevFormat ?? {})
+        : undefined
+    }))))
+  }, [runWrite, updateCellsBatch])
 
   const handleUpdateCell = useCallback((cellId: string, value: string) => {
     const prevCell = cells[cellId]
@@ -127,8 +200,14 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
       nextRaw: value,
       nextFormat: prevCell?.format
     }])
-    applyEdit(cellId, value, prevCell?.format)
-  }, [cells, history, applyEdit])
+    persistEdits([{
+      cellId,
+      prevRaw,
+      prevFormat: prevCell?.format,
+      nextRaw: value,
+      nextFormat: prevCell?.format
+    }])
+  }, [cells, history, persistEdits])
 
   const getSelectedFormat = useMemo(() => {
     if (selectedCells.size === 0) return {}
@@ -332,8 +411,11 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
       })
     })
     history.record(edits)
-    edits.forEach(edit => applyEdit(edit.cellId, edit.nextRaw, edit.nextFormat))
-  }, [selectedCells, cells, history, applyEdit])
+    void runWrite(() => updateFormatBatch(edits.map((edit) => ({
+      cellId: edit.cellId,
+      format: edit.nextFormat ?? {}
+    }))))
+  }, [selectedCells, cells, history, runWrite, updateFormatBatch])
 
   const handleClearFormat = useCallback(() => {
     const edits: CellEdit[] = []
@@ -348,8 +430,11 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
       })
     })
     history.record(edits)
-    edits.forEach(edit => applyEdit(edit.cellId, edit.nextRaw, edit.nextFormat))
-  }, [selectedCells, cells, history, applyEdit])
+    void runWrite(() => updateFormatBatch(edits.map((edit) => ({
+      cellId: edit.cellId,
+      format: edit.nextFormat ?? {}
+    }))))
+  }, [selectedCells, cells, history, runWrite, updateFormatBatch])
 
   // Delete/Backspace: clear the content of every selected cell, keeping formatting.
   const handleClearSelectedCells = useCallback(() => {
@@ -369,20 +454,34 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     })
     if (edits.length === 0) return
     history.record(edits)
-    edits.forEach(edit => applyEdit(edit.cellId, edit.nextRaw, edit.nextFormat))
-  }, [selectedCells, cells, history, applyEdit])
+    void runWrite(() => clearCellsBatch(edits.map((edit) => edit.cellId), cells))
+  }, [selectedCells, cells, history, runWrite, clearCellsBatch])
 
   const handleUndo = useCallback(() => {
-    history.undo(applyEdit)
-  }, [history, applyEdit])
+    const action = history.takeUndoAction()
+    if (action) persistEdits(action, 'prev')
+  }, [history, persistEdits])
 
   const handleRedo = useCallback(() => {
-    history.redo(applyEdit)
-  }, [history, applyEdit])
+    const action = history.takeRedoAction()
+    if (action) persistEdits(action, 'next')
+  }, [history, persistEdits])
 
   const handleResizeColumn = useCallback((colIndex: number, width: number) => {
-    setColumnWidths(prev => ({ ...prev, [colIndex]: width }))
-  }, [])
+    setColumnWidths(prev => {
+      const next = { ...prev, [colIndex]: width }
+      scheduleLayoutSave({ columnWidths: next, rowHeights })
+      return next
+    })
+  }, [scheduleLayoutSave, rowHeights])
+
+  const handleResizeRow = useCallback((rowIndex: number, height: number) => {
+    setRowHeights(prev => {
+      const next = { ...prev, [rowIndex]: height }
+      scheduleLayoutSave({ columnWidths, rowHeights: next })
+      return next
+    })
+  }, [scheduleLayoutSave, columnWidths])
 
   const handleCopy = useCallback(() => {
     const tsv = buildRangeTSV(selectedCells, cells, cellToCoords, coordsToCell)
@@ -423,9 +522,9 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
 
       if (edits.length === 0) return
       history.record(edits)
-      edits.forEach(edit => applyEdit(edit.cellId, edit.nextRaw, edit.nextFormat))
+      persistEdits(edits)
     }).catch(() => {})
-  }, [activeCellId, cellToCoords, coordsToCell, cells, history, applyEdit])
+  }, [activeCellId, cellToCoords, coordsToCell, cells, history, persistEdits])
 
   // --- Grid-level keyboard handling (only when not editing a cell) -------
 
