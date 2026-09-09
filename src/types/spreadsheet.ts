@@ -7,6 +7,16 @@ export type CellFormat = {
   textColor?: string
 }
 
+/**
+ * Same shape as CellFormat, but each field may also be the literal "mixed"
+ * when the selected cells don't all agree on that property - used by the
+ * toolbar to show an indeterminate/mixed state instead of just whatever the
+ * first selected cell happens to have.
+ */
+export type MixedCellFormat = {
+  [K in keyof CellFormat]?: CellFormat[K] | 'mixed'
+}
+
 export type CellData = {
   raw: string      // what the user typed, e.g. "=A1+B1" or "42" or "hello"
   display: string  // computed display value, e.g. "42" or an error code like "#CYCLE!"

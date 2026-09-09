@@ -10,7 +10,7 @@ import { useSelection } from "@/hooks/useSelection"
 import { useSessionUser } from "@/hooks/useSessionUser"
 import { useHistory, CellEdit } from "@/hooks/useHistory"
 import { buildRangeTSV, parseTSV } from "@/lib/rangeClipboard"
-import { CellFormat, Cells, UserPresence } from "@/types/spreadsheet"
+import { CellFormat, Cells, MixedCellFormat, UserPresence } from "@/types/spreadsheet"
 
 const ROWS = 30
 const COLS = 20
@@ -21,6 +21,7 @@ const DEFAULT_ROW_HEIGHT = 36
 const MIN_ROW_HEIGHT = 24
 const MAX_ROW_HEIGHT = 120
 const LAYOUT_SAVE_DELAY_MS = 350
+const FORMAT_KEYS: (keyof CellFormat)[] = ['bold', 'italic', 'fontSize', 'textAlign', 'backgroundColor', 'textColor']
 
 function colName(index: number) {
   return String.fromCharCode(65 + index)
@@ -214,10 +215,19 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     }])
   }, [cells, history, persistEdits])
 
-  const getSelectedFormat = useMemo(() => {
+  const getSelectedFormat = useMemo((): MixedCellFormat => {
     if (selectedCells.size === 0) return {}
-    const firstCell = Array.from(selectedCells)[0]
-    return cells[firstCell]?.format || {}
+
+    const formats = Array.from(selectedCells).map(id => cells[id]?.format || {})
+    const result: Record<string, unknown> = {}
+
+    FORMAT_KEYS.forEach(key => {
+      const firstValue = formats[0][key]
+      const allAgree = formats.every(f => f[key] === firstValue)
+      result[key] = allAgree ? firstValue : 'mixed'
+    })
+
+    return result as MixedCellFormat
   }, [selectedCells, cells])
 
   // --- Edit mode -------------------------------------------------------
@@ -402,7 +412,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
     return activeCellId || ""
   }, [selectedCells, isRectangularSelection, selectionBounds, coordsToCell, activeCellId])
 
-  const handleFormat = useCallback((format: CellFormat) => {
+  const handleFormat = useCallback((format: Partial<CellFormat>) => {
     const edits: CellEdit[] = []
     selectedCells.forEach(cellId => {
       const currentCell = cells[cellId] || { raw: '' }
@@ -626,6 +636,7 @@ export default function Spreadsheet({ docId, onCellsChange, onWriteStateChange, 
         selectedFormat={getSelectedFormat}
         onFormat={handleFormat}
         onClearFormat={handleClearFormat}
+        onClearContents={handleClearSelectedCells}
         onClearSelection={clearSelection}
         onUndo={handleUndo}
         onRedo={handleRedo}
