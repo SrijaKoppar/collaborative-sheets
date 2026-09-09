@@ -359,22 +359,26 @@ function evalNode(node: AstNode, ctx: EvalContext): number {
   throw new FormulaError("#ERROR!")
 }
 
+// Policy decision: an error inside an aggregate's range/ref argument
+// propagates to the aggregate itself (matching Excel/Sheets - SUM(A1:A5)
+// shows #DIV/0! if A3 does), rather than being silently skipped. Blank
+// cells and non-numeric text are still excluded, not errors.
 function collectArgValues(args: AstNode[], ctx: EvalContext): number[] {
   const values: number[] = []
 
-  const pushIfNumeric = (cellId: string) => {
+  const pushValue = (cellId: string) => {
     const result = evaluateCellInternal(cellId, ctx)
-    if (result.error) return // ignore errored cells within an aggregate range
-    if (result.value === "") return // ignore blanks within an aggregate range
+    if (result.error) throw new FormulaError(result.error)
+    if (result.value === "") return // blanks are excluded, not an error
     const num = typeof result.value === "number" ? result.value : Number(result.value)
-    if (!isNaN(num)) values.push(num)
+    if (!isNaN(num)) values.push(num) // non-numeric text is excluded, not an error
   }
 
   for (const arg of args) {
     if (arg.type === "range") {
-      expandRange(arg.start, arg.end).forEach(pushIfNumeric)
+      expandRange(arg.start, arg.end).forEach(pushValue)
     } else if (arg.type === "ref") {
-      pushIfNumeric(arg.cell)
+      pushValue(arg.cell)
     } else {
       values.push(evalNode(arg, ctx))
     }
@@ -390,7 +394,8 @@ function evalCall(node: Extract<AstNode, { type: "call" }>, ctx: EvalContext): n
     case "SUM":
       return values.reduce((a, b) => a + b, 0)
     case "AVERAGE":
-      return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0
+      if (values.length === 0) throw new FormulaError("#DIV/0!")
+      return values.reduce((a, b) => a + b, 0) / values.length
     case "MIN":
       return values.length > 0 ? Math.min(...values) : 0
     case "MAX":
